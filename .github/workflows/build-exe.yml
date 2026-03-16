@@ -55,14 +55,25 @@ jobs:
           .\.venv\Scripts\python.exe -m PyInstaller --name AirBarAudioSeparator `
             --onedir `
             --windowed `
-            --add-data "background.jpg:." `
-            --add-data "ok:ok" `
-            --exclude-module torch `
+            --collect-data resemblyzer `
+            --collect-submodules torch `
+            --add-data "background.jpg;." `
+            --add-data "ok;ok" `
             --exclude-module pandas `
             --exclude-module matplotlib `
             --exclude-module jupyter `
             --exclude-module IPython `
             gui_resemblyzer.py
+
+      - name: Verify packaged files
+        run: |
+          if (-not (Test-Path "dist/AirBarAudioSeparator/background.jpg")) {
+            throw "background.jpg was not packaged"
+          }
+          if (-not (Test-Path "dist/AirBarAudioSeparator/ok")) {
+            throw "ok folder was not packaged"
+          }
+          Write-Host "Packaged assets verified."
       
       - name: Clean up build files
         run: |
