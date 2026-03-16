@@ -4,6 +4,7 @@ import shutil
 import sys
 import threading
 import warnings
+import webbrowser
 from datetime import datetime
 from pathlib import Path
 from tkinter import DoubleVar, Label, StringVar, Tk, filedialog, messagebox, ttk
@@ -27,7 +28,7 @@ def detect_app_base_dir() -> Path:
         start = Path(__file__).resolve().parent
 
     for candidate in [start, *start.parents]:
-        if (candidate / "ok").exists() and (candidate / "models").exists():
+        if (candidate / "ok").exists() or (candidate / "background.jpg").exists():
             return candidate
 
     return start
@@ -251,8 +252,8 @@ def apply_hits_from_report(
         raise FileNotFoundError(f"report csv not found: {report_csv}")
     if not target_root.exists():
         raise FileNotFoundError(f"target root not found: {target_root}")
-    if action not in {"rename_prefix", "copy_to_dir"}:
-        raise ValueError("batch action must be rename_prefix or copy_to_dir")
+    if action not in {"copy_rename", "copy_to_dir"}:
+        raise ValueError("batch action must be copy_rename or copy_to_dir")
 
     target_root = target_root.resolve()
     processed_paths = []
@@ -282,8 +283,9 @@ def apply_hits_from_report(
             outside_count += 1
             continue
 
-        if action == "rename_prefix":
-            new_path = safe_rename_with_prefix(src_resolved, prefix)
+        if action == "copy_rename":
+            copied = safe_copy_to_folder(src_resolved, copy_dir)
+            new_path = safe_rename_with_prefix(copied, prefix)
             processed_paths.append(str(new_path))
         elif action == "copy_to_dir":
             out = safe_copy_to_folder(src_resolved, copy_dir)
@@ -305,8 +307,9 @@ def apply_hits_from_report(
 
 class App:
     def __init__(self, root: Tk):
+        self.github_url = "https://github.com/Exodiamisuzu"
         self.root = root
-        self.root.title("Resemblyzer Speaker Filter")
+        self.root.title("音频分离器[Air吧]")
         self.root.geometry("1080x820")
         self.root.minsize(980, 760)
 
@@ -337,7 +340,7 @@ class App:
         self.hit_report_csv = StringVar(value=str(default_report))
         self.hit_root_dir = StringVar(value=str(default_input_dir))
 
-        self.action = StringVar(value="none")
+        self.action_mode = StringVar(value="copy_rename")
         self.prefix = StringVar(value="Misuzu")
         self.copy_dir = StringVar(value=str(default_copy_dir))
         self.renamed_txt = StringVar(value=str(default_renamed))
@@ -348,6 +351,12 @@ class App:
         self.step2_btn = None
         self.step3_btn = None
         self.progress_bar = None
+        self.action_mode_radios = []
+        self.prefix_label = None
+        self.prefix_entry = None
+        self.copy_dir_label = None
+        self.copy_dir_entry = None
+        self.copy_dir_btn = None
 
         self._configure_styles()
         self._build_ui()
@@ -373,6 +382,7 @@ class App:
         style.configure("Primary.TButton", font=("Microsoft YaHei UI", 10, "bold"), padding=(12, 7))
         style.configure("Status.TLabel", background="#f7f9fc", foreground="#0d3b66", font=("Microsoft YaHei UI", 10, "bold"))
         style.configure("Action.TButton", font=("Microsoft YaHei UI", 10, "bold"), padding=(12, 9))
+        style.configure("Browse.TButton", font=("Microsoft YaHei UI", 9), padding=(6, 2))
         style.configure("TNotebook", background="#f7f9fc", borderwidth=0)
         style.configure("TNotebook.Tab", font=("Microsoft YaHei UI", 10, "bold"), padding=(14, 8))
         style.map("TNotebook.Tab", background=[("selected", "#ffffff"), ("!selected", "#deebf6")])
@@ -383,9 +393,20 @@ class App:
 
         top_bar = ttk.Frame(frame, style="App.TFrame")
         top_bar.grid(row=0, column=0, columnspan=2, sticky="ew")
-        ttk.Label(top_bar, text="Resemblyzer Speaker Filter", style="Header.TLabel").grid(row=0, column=0, sticky="w")
-        ttk.Label(top_bar, text="更清晰的三步流：先构建向量，再扫描，再批处理", style="SubHeader.TLabel").grid(row=1, column=0, sticky="w", pady=(0, 10))
+        ttk.Label(top_bar, text="音频分离器[Air吧]", style="Header.TLabel").grid(row=0, column=0, sticky="w")
+        ttk.Label(top_bar, text="清晰的三步流：先构建向量，再扫描，再批处理", style="SubHeader.TLabel").grid(row=1, column=0, sticky="w", pady=(0, 10))
         top_bar.grid_columnconfigure(0, weight=1)
+
+        github_label = Label(
+            top_bar,
+            text="GitHub: @Exodiamisuzu",
+            fg="#1d5f91",
+            bg="#edf2f7",
+            cursor="hand2",
+            font=("Microsoft YaHei UI", 10, "underline"),
+        )
+        github_label.grid(row=0, column=1, rowspan=2, sticky="e")
+        github_label.bind("<Button-1>", lambda _event: self._open_github())
 
         left_panel = ttk.Frame(frame, padding=10, style="Panel.TFrame")
         left_panel.grid(row=1, column=0, sticky="nsew", padx=(0, 10))
@@ -406,7 +427,15 @@ class App:
         ref_card = ttk.LabelFrame(tab1, text="参考向量构建（可选）", style="Card.TLabelframe", padding=10)
         ref_card.pack(fill="x")
         self._add_path_row(ref_card, 0, "参考音频目录", self.reference_dir, pick_dir=True)
-        self._add_path_row(ref_card, 1, "构建输出角色特征向量", self.reference_output_npy, pick_save=True)
+        self._add_path_row(
+            ref_card,
+            1,
+            "构建输出角色特征向量",
+            self.reference_output_npy,
+            pick_save=True,
+            save_filetypes=[("NumPy file", "*.npy"), ("All files", "*.*")],
+            save_ext=".npy",
+        )
         ttk.Label(ref_card, text="meta.json 将与输出向量同路径自动生成", style="Hint.TLabel").grid(row=2, column=0, columnspan=4, sticky="w", pady=(4, 0))
         ttk.Label(ref_card, text="如你已有 .npy，请在步骤2填写“扫描用特征向量”", style="Hint.TLabel").grid(row=3, column=0, columnspan=4, sticky="w", pady=(2, 0))
         ref_card.grid_columnconfigure(1, weight=1)
@@ -422,7 +451,15 @@ class App:
             pick_file=True,
             filetypes=[("NumPy file", "*.npy"), ("All files", "*.*")],
         )
-        self._add_path_row(scan_card, 2, "报告CSV输出路径", self.report_csv, pick_save=True)
+        self._add_path_row(
+            scan_card,
+            2,
+            "报告CSV输出路径",
+            self.report_csv,
+            pick_save=True,
+            save_filetypes=[("CSV file", "*.csv"), ("All files", "*.*")],
+            save_ext=".csv",
+        )
         ttk.Label(scan_card, text="阈值 (0~1)", style="Body.TLabel").grid(row=3, column=0, sticky="w", pady=(8, 2))
         ttk.Entry(scan_card, textvariable=self.threshold, width=16).grid(row=3, column=1, sticky="w", pady=(8, 2))
         ttk.Label(scan_card, text="最短秒数", style="Body.TLabel").grid(row=3, column=2, sticky="w", pady=(8, 2))
@@ -435,20 +472,60 @@ class App:
         self._add_path_row(
             action_card,
             0,
-            "报告CSV路径",
+            "命中报告CSV（步骤2输出）",
             self.hit_report_csv,
             pick_file=True,
             filetypes=[("CSV file", "*.csv"), ("All files", "*.*")],
         )
-        self._add_path_row(action_card, 1, "处理目标根目录", self.hit_root_dir, pick_dir=True)
-        ttk.Label(action_card, text="动作", style="Body.TLabel").grid(row=2, column=0, sticky="w", pady=(8, 2))
-        ttk.Combobox(action_card, textvariable=self.action, values=["rename_prefix", "copy_to_dir"], state="readonly", width=18).grid(row=2, column=1, sticky="w", pady=(8, 2))
-        ttk.Label(action_card, text="重命名前缀", style="Body.TLabel").grid(row=2, column=2, sticky="w", pady=(8, 2))
-        ttk.Entry(action_card, textvariable=self.prefix, width=18).grid(row=2, column=3, sticky="w", pady=(8, 2))
-        self._add_path_row(action_card, 3, "复制输出目录", self.copy_dir, pick_dir=True)
-        self._add_path_row(action_card, 4, "处理结果 TXT", self.renamed_txt, pick_save=True)
+        self._add_path_row(action_card, 1, "仅处理该根目录下文件", self.hit_root_dir, pick_dir=True)
+
+        ttk.Label(action_card, text="处理方式", style="Body.TLabel").grid(row=2, column=0, sticky="w", pady=(8, 2))
+        radio_frame = ttk.Frame(action_card)
+        radio_frame.grid(row=2, column=1, columnspan=3, sticky="w", pady=(8, 2))
+        self.action_mode_radios = [
+            ttk.Radiobutton(
+                radio_frame,
+                text="复制到并重命名",
+                variable=self.action_mode,
+                value="copy_rename",
+                command=self._on_action_mode_changed,
+                style="TRadiobutton"
+            ),
+            ttk.Radiobutton(
+                radio_frame,
+                text="仅复制到输出目录",
+                variable=self.action_mode,
+                value="copy_to_dir",
+                command=self._on_action_mode_changed,
+                style="TRadiobutton"
+            ),
+        ]
+        for i, rb in enumerate(self.action_mode_radios):
+            rb.grid(row=i, column=0, sticky="w", pady=(0, 6))
+
+        self.prefix_label = ttk.Label(action_card, text="前缀(复制并重命名时)", style="Body.TLabel")
+        self.prefix_label.grid(row=2, column=2, sticky="w", pady=(8, 2))
+        self.prefix_entry = ttk.Entry(action_card, textvariable=self.prefix, width=18)
+        self.prefix_entry.grid(row=2, column=3, sticky="w", pady=(8, 2))
+
+        self.copy_dir_label, self.copy_dir_entry, self.copy_dir_btn = self._add_path_row(
+            action_card,
+            3,
+            "输出目录",
+            self.copy_dir,
+            pick_dir=True,
+        )
+        self._add_path_row(
+            action_card,
+            4,
+            "处理结果清单路径",
+            self.renamed_txt,
+            pick_save=True,
+            save_filetypes=[("Text file", "*.txt"), ("All files", "*.*")],
+            save_ext=".txt",
+        )
         ttk.Label(action_card, text="仅处理报告中 is_target=1 的记录", style="Hint.TLabel").grid(row=5, column=0, columnspan=4, sticky="w", pady=(4, 0))
-        ttk.Label(action_card, text="建议先确认报告路径和目标根目录，再执行步骤3", style="Hint.TLabel").grid(row=6, column=0, columnspan=4, sticky="w", pady=(2, 0))
+        ttk.Label(action_card, text="复制到并重命名：会复制到输出目录并添加前缀，不改动原文件", style="Hint.TLabel").grid(row=6, column=0, columnspan=4, sticky="w", pady=(2, 0))
         action_card.grid_columnconfigure(1, weight=1)
 
         run_card = ttk.LabelFrame(right_panel, text="运行控制", style="Card.TLabelframe", padding=10)
@@ -467,14 +544,16 @@ class App:
 
         tips_card = ttk.LabelFrame(right_panel, text="快速提示", style="Card.TLabelframe", padding=10)
         tips_card.pack(fill="x", pady=(10, 0))
-        ttk.Label(tips_card, text="1. 没有现成 embedding 时先执行步骤1", style="Body.TLabel").pack(anchor="w")
+        ttk.Label(tips_card, text="1. 没有现成特征向量时先执行步骤1", style="Body.TLabel").pack(anchor="w")
         ttk.Label(tips_card, text="2. 阈值越高，命中越严格", style="Body.TLabel").pack(anchor="w", pady=(3, 0))
-        ttk.Label(tips_card, text="3. 步骤3会改动文件名或复制文件", style="Body.TLabel").pack(anchor="w", pady=(3, 0))
+        ttk.Label(tips_card, text="3. 步骤3默认不会修改原文件", style="Body.TLabel").pack(anchor="w", pady=(3, 0))
 
         log_card = ttk.LabelFrame(right_panel, text="运行日志", style="Card.TLabelframe", padding=8)
         log_card.pack(fill="both", expand=True, pady=(10, 0))
         self.log_box = ScrolledText(log_card, height=18, font=("Consolas", 10), bg="#fbfdff", relief="flat")
         self.log_box.pack(fill="both", expand=True)
+
+        self._sync_action_fields()
 
         frame.grid_columnconfigure(0, weight=3)
         frame.grid_columnconfigure(1, weight=2)
@@ -515,15 +594,42 @@ class App:
         self._bg_photo = ImageTk.PhotoImage(resized)
         self._bg_label.configure(image=self._bg_photo)
 
+    def _open_github(self):
+        webbrowser.open_new_tab(self.github_url)
+
     def _resolve_path(self, value: str) -> Path:
+        value = self._normalize_path_text(value)
         p = Path(value)
         if p.is_absolute():
             return p
         return (self.base_dir / p).resolve()
 
-    def _add_path_row(self, parent, row, label, var, pick_dir=False, pick_file=False, pick_save=False, filetypes=None):
-        ttk.Label(parent, text=label, style="Body.TLabel").grid(row=row, column=0, sticky="w", pady=3)
-        ttk.Entry(parent, textvariable=var, width=80).grid(row=row, column=1, columnspan=2, sticky="ew", padx=(0, 6), pady=2)
+    def _normalize_path_text(self, value: str) -> str:
+        if not value:
+            return value
+
+        text = str(Path(value))
+        if sys.platform.startswith("win"):
+            return text.replace("/", "\\")
+        return text
+
+    def _add_path_row(
+        self,
+        parent,
+        row,
+        label,
+        var,
+        pick_dir=False,
+        pick_file=False,
+        pick_save=False,
+        filetypes=None,
+        save_filetypes=None,
+        save_ext=None,
+    ):
+        label_widget = ttk.Label(parent, text=label, style="Body.TLabel")
+        label_widget.grid(row=row, column=0, sticky="w", pady=3)
+        entry_widget = ttk.Entry(parent, textvariable=var, width=80)
+        entry_widget.grid(row=row, column=1, columnspan=2, sticky="ew", padx=(0, 6), pady=2)
 
         def choose():
             if pick_dir:
@@ -531,13 +637,37 @@ class App:
             elif pick_file:
                 value = filedialog.askopenfilename(filetypes=filetypes or [("All files", "*.*")])
             elif pick_save:
-                value = filedialog.asksaveasfilename()
+                value = filedialog.asksaveasfilename(
+                    defaultextension=save_ext or "",
+                    filetypes=save_filetypes or [("All files", "*.*")],
+                )
             else:
                 value = ""
             if value:
-                var.set(value)
+                if pick_save and save_ext and Path(value).suffix == "":
+                    value = f"{value}{save_ext}"
+                var.set(self._normalize_path_text(value))
 
-        ttk.Button(parent, text="浏览", command=choose).grid(row=row, column=3, sticky="w")
+        button_widget = ttk.Button(parent, text="选择", command=choose, style="Browse.TButton", width=5)
+        button_widget.grid(row=row, column=3, sticky="w")
+        return label_widget, entry_widget, button_widget
+
+    def _selected_action_value(self) -> str:
+        return self.action_mode.get()
+
+    def _on_action_mode_changed(self, _event=None):
+        self._sync_action_fields()
+
+    def _sync_action_fields(self):
+        action = self._selected_action_value()
+        copy_rename_mode = action == "copy_rename"
+
+        if self.prefix_entry is not None:
+            self.prefix_entry.configure(state="normal" if copy_rename_mode else "disabled")
+        if self.copy_dir_entry is not None:
+            self.copy_dir_entry.configure(state="normal")
+        if self.copy_dir_btn is not None:
+            self.copy_dir_btn.configure(state="normal")
 
     def log(self, text: str):
         ts = datetime.now().strftime("%H:%M:%S")
@@ -649,11 +779,13 @@ class App:
         try:
             self.log("========== 步骤3开始：批处理命中文件 ==========")
             self.log(f"Base directory: {self.base_dir}")
-            action = self.action.get()
-            if action not in {"rename_prefix", "copy_to_dir"}:
-                raise ValueError("步骤3的动作必须为 rename_prefix 或 copy_to_dir")
-            if action == "rename_prefix" and not self.prefix.get().strip():
-                raise ValueError("重命名前缀不能为空")
+            action = self._selected_action_value()
+            if action == "copy_to_dir" and not self.copy_dir.get().strip():
+                raise ValueError("复制模式下，输出目录不能为空")
+            if action == "copy_rename" and not self.copy_dir.get().strip():
+                raise ValueError("复制并重命名模式下，输出目录不能为空")
+            if action == "copy_rename" and not self.prefix.get().strip():
+                raise ValueError("复制并重命名模式下，前缀不能为空")
 
             apply_hits_from_report(
                 report_csv=self._resolve_path(self.hit_report_csv.get()),
