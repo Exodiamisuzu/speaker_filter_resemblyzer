@@ -1,0 +1,96 @@
+name: Build Windows EXE
+
+on:
+  push:
+    branches:
+      - main
+    paths:
+      - 'speaker_filter_resemblyzer/**'
+      - '.github/workflows/build-exe.yml'
+  pull_request:
+    branches:
+      - main
+    paths:
+      - 'speaker_filter_resemblyzer/**'
+  workflow_dispatch:
+
+jobs:
+  build:
+    runs-on: windows-latest
+    
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+      
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      
+      - name: Create and activate venv
+        working-directory: speaker_filter_resemblyzer
+        run: |
+          python -m venv .venv
+          .\.venv\Scripts\Activate.ps1
+          python -m pip install --upgrade pip
+      
+      - name: Install dependencies
+        working-directory: speaker_filter_resemblyzer
+        run: |
+          .\.venv\Scripts\Activate.ps1
+          pip install -r requirements.txt
+          pip install pyinstaller
+      
+      - name: Build EXE
+        working-directory: speaker_filter_resemblyzer
+        run: |
+          .\.venv\Scripts\Activate.ps1
+          python -m PyInstaller --name AirBarAudioSeparator `
+            --onedir `
+            --windowed `
+            --add-data "background.jpg:." `
+            --add-data "ok:ok" `
+            --exclude-module torch `
+            --exclude-module pandas `
+            --exclude-module matplotlib `
+            --exclude-module jupyter `
+            --exclude-module IPython `
+            gui_resemblyzer.py
+      
+      - name: Clean up build files
+        working-directory: speaker_filter_resemblyzer
+        run: |
+          Remove-Item -Force -Path "AirBarAudioSeparator.spec" -ErrorAction SilentlyContinue
+          Remove-Item -Recurse -Force -Path "build" -ErrorAction SilentlyContinue
+      
+      - name: Create ZIP archive
+        working-directory: speaker_filter_resemblyzer
+        run: |
+          Compress-Archive -Path dist/AirBarAudioSeparator -DestinationPath dist/AirBarAudioSeparator.zip -Force
+          Write-Output "ZIP 压缩完成"
+          Get-Item dist/AirBarAudioSeparator.zip | Select-Object Name, @{Name="Size(MB)";Expression={[math]::Round($_.Length/1MB,2)}}
+      
+      - name: Upload artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: AirBarAudioSeparator-exe
+          path: speaker_filter_resemblyzer/dist/AirBarAudioSeparator/
+          retention-days: 7
+      
+      - name: Upload zip artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: AirBarAudioSeparator-zip
+          path: speaker_filter_resemblyzer/dist/AirBarAudioSeparator.zip
+          retention-days: 7
+      
+      - name: Create Release (on tag)
+        if: startsWith(github.ref, 'refs/tags/v')
+        uses: softprops/action-gh-release@v1
+        with:
+          files: |
+            speaker_filter_resemblyzer/dist/AirBarAudioSeparator.zip
+          draft: false
+          prerelease: false
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
