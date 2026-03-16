@@ -54,6 +54,7 @@ jobs:
         run: |
           .\.venv\Scripts\python.exe -m PyInstaller --name AirBarAudioSeparator `
             --onedir `
+            --contents-directory . `
             --windowed `
             --collect-data resemblyzer `
             --collect-submodules torch `
@@ -67,12 +68,18 @@ jobs:
 
       - name: Verify packaged files
         run: |
-          if (-not (Test-Path "dist/AirBarAudioSeparator/background.jpg")) {
+          $bgAtRoot = Test-Path "dist/AirBarAudioSeparator/background.jpg"
+          $bgAtInternal = Test-Path "dist/AirBarAudioSeparator/_internal/background.jpg"
+          if (-not ($bgAtRoot -or $bgAtInternal)) {
             throw "background.jpg was not packaged"
           }
-          if (-not (Test-Path "dist/AirBarAudioSeparator/ok")) {
+
+          $okAtRoot = Test-Path "dist/AirBarAudioSeparator/ok"
+          $okAtInternal = Test-Path "dist/AirBarAudioSeparator/_internal/ok"
+          if (-not ($okAtRoot -or $okAtInternal)) {
             throw "ok folder was not packaged"
           }
+
           Write-Host "Packaged assets verified."
       
       - name: Clean up build files
