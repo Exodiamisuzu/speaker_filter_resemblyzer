@@ -4,3 +4,4 @@ tqdm>=4.66
 soundfile>=0.12
 librosa>=0.10
 setuptools<81
+Pillow>=10.0
