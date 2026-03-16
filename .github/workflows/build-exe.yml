@@ -37,6 +37,17 @@ jobs:
           .\.venv\Scripts\python.exe -m pip install --upgrade pip
           .\.venv\Scripts\python.exe -m pip install -r requirements.txt
           .\.venv\Scripts\python.exe -m pip install pyinstaller
+
+      - name: Remove incompatible backport packages
+        run: |
+          .\.venv\Scripts\python.exe -m pip show typing *> $null
+          if ($LASTEXITCODE -eq 0) {
+            .\.venv\Scripts\python.exe -m pip uninstall -y typing
+          }
+          .\.venv\Scripts\python.exe -m pip show pandas *> $null
+          if ($LASTEXITCODE -eq 0) {
+            .\.venv\Scripts\python.exe -m pip uninstall -y pandas
+          }
       
       - name: Build EXE
         run: |
