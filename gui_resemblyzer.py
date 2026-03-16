@@ -1,5 +1,7 @@
 import csv
 import json
+import shutil
+import sys
 import threading
 import warnings
 from datetime import datetime
@@ -7,12 +9,22 @@ from pathlib import Path
 from tkinter import BooleanVar, DoubleVar, IntVar, StringVar, Tk, filedialog, messagebox, ttk
 from tkinter.scrolledtext import ScrolledText
 
-import numpy as np
-from resemblyzer import VoiceEncoder, preprocess_wav
-
 warnings.filterwarnings("ignore", message="pkg_resources is deprecated as an API")
 
 AUDIO_EXTS = {".wav", ".mp3", ".flac", ".m4a", ".ogg"}
+
+
+def detect_app_base_dir() -> Path:
+    if getattr(sys, "frozen", False):
+        start = Path(sys.executable).resolve().parent
+    else:
+        start = Path(__file__).resolve().parent
+
+    for candidate in [start, *start.parents]:
+        if (candidate / "ok").exists() and (candidate / "models").exists():
+            return candidate
+
+    return start
 
 
 def iter_audio_files(folder: Path):
@@ -21,7 +33,15 @@ def iter_audio_files(folder: Path):
             yield p
 
 
-def cosine(a: np.ndarray, b: np.ndarray) -> float:
+def load_encoder_dependencies():
+    import numpy as np
+    from resemblyzer import VoiceEncoder, preprocess_wav
+
+    return np, VoiceEncoder, preprocess_wav
+
+
+def cosine(a, b) -> float:
+    np, _, _ = load_encoder_dependencies()
     return float(np.dot(a, b) / ((np.linalg.norm(a) + 1e-9) * (np.linalg.norm(b) + 1e-9)))
 
 
@@ -42,14 +62,14 @@ def safe_copy_to_folder(src: Path, out_dir: Path) -> Path:
     out_dir.mkdir(parents=True, exist_ok=True)
     candidate = out_dir / src.name
     if not candidate.exists():
-        candidate.write_bytes(src.read_bytes())
+        shutil.copy2(src, candidate)
         return candidate
 
     i = 1
     while True:
         candidate = out_dir / f"{src.stem}__{i}{src.suffix}"
         if not candidate.exists():
-            candidate.write_bytes(src.read_bytes())
+            shutil.copy2(src, candidate)
             return candidate
         i += 1
 
@@ -59,6 +79,7 @@ def build_reference(reference_dir: Path, output_npy: Path, meta_json: Path, min_
         raise FileNotFoundError(f"reference dir not found: {reference_dir}")
 
     log("Loading voice encoder for reference build...")
+    np, VoiceEncoder, preprocess_wav = load_encoder_dependencies()
     encoder = VoiceEncoder()
     embeddings = []
     used_files = []
@@ -129,6 +150,7 @@ def classify_and_label(
     if not reference_embedding.exists():
         raise FileNotFoundError(f"reference embedding not found: {reference_embedding}")
 
+    np, VoiceEncoder, preprocess_wav = load_encoder_dependencies()
     ref = np.load(reference_embedding)
     ref = ref / (np.linalg.norm(ref) + 1e-9)
 
@@ -216,22 +238,34 @@ class App:
         self.root.title("Resemblyzer Speaker Filter")
         self.root.geometry("980x760")
 
-        self.ref_mode = IntVar(value=1)
-        self.reference_dir = StringVar(value="ok")
-        self.reference_embedding = StringVar(value="models/ok_role.npy")
-        self.reference_output_npy = StringVar(value="models/gui_role.npy")
-        self.reference_output_meta = StringVar(value="models/gui_role.meta.json")
+        self.base_dir = detect_app_base_dir()
+        default_ref_dir = self.base_dir / "ok"
+        default_ref_emb = self.base_dir / "models" / "ok_role.npy"
+        default_ref_out = self.base_dir / "models" / "gui_role.npy"
+        default_ref_meta = self.base_dir / "models" / "gui_role.meta.json"
+        default_input_dir = self.base_dir / ".." / "KOE" / "0001"
+        if not default_input_dir.exists():
+            default_input_dir = self.base_dir / "KOE" / "0001"
+        default_report = self.base_dir / "reports" / "gui_scan_report.csv"
+        default_copy_dir = self.base_dir / "outputs" / "gui_target_hits"
+        default_renamed = self.base_dir / "reports" / "gui_renamed_list.txt"
 
-        self.input_dir = StringVar(value="../KOE/0001")
+        self.ref_mode = IntVar(value=1)
+        self.reference_dir = StringVar(value=str(default_ref_dir))
+        self.reference_embedding = StringVar(value=str(default_ref_emb))
+        self.reference_output_npy = StringVar(value=str(default_ref_out))
+        self.reference_output_meta = StringVar(value=str(default_ref_meta))
+
+        self.input_dir = StringVar(value=str(default_input_dir))
         self.threshold = DoubleVar(value=0.73)
         self.min_seconds = DoubleVar(value=0.8)
-        self.report_csv = StringVar(value="reports/gui_scan_report.csv")
+        self.report_csv = StringVar(value=str(default_report))
 
         self.apply_changes = BooleanVar(value=False)
         self.action = StringVar(value="none")
         self.prefix = StringVar(value="Misuzu")
-        self.copy_dir = StringVar(value="outputs/gui_target_hits")
-        self.renamed_txt = StringVar(value="reports/gui_renamed_list.txt")
+        self.copy_dir = StringVar(value=str(default_copy_dir))
+        self.renamed_txt = StringVar(value=str(default_renamed))
 
         self.running = False
 
@@ -289,6 +323,12 @@ class App:
         frame.grid_columnconfigure(1, weight=1)
         frame.grid_rowconfigure(19, weight=1)
 
+    def _resolve_path(self, value: str) -> Path:
+        p = Path(value)
+        if p.is_absolute():
+            return p
+        return (self.base_dir / p).resolve()
+
     def _add_path_row(self, parent, row, label, var, pick_dir=False, pick_file=False, pick_save=False):
         ttk.Label(parent, text=label).grid(row=row, column=0, sticky="w", pady=2)
         ttk.Entry(parent, textvariable=var, width=80).grid(row=row, column=1, columnspan=2, sticky="ew", padx=(0, 6), pady=2)
@@ -343,30 +383,31 @@ class App:
     def _run_task(self):
         try:
             self.log("========== 任务开始 ==========")
+            self.log(f"Base directory: {self.base_dir}")
 
             if self.ref_mode.get() == 1:
                 reference_embedding = build_reference(
-                    Path(self.reference_dir.get()),
-                    Path(self.reference_output_npy.get()),
-                    Path(self.reference_output_meta.get()),
+                    self._resolve_path(self.reference_dir.get()),
+                    self._resolve_path(self.reference_output_npy.get()),
+                    self._resolve_path(self.reference_output_meta.get()),
                     self.min_seconds.get(),
                     self.log,
                 )
             else:
-                reference_embedding = Path(self.reference_embedding.get())
+                reference_embedding = self._resolve_path(self.reference_embedding.get())
                 self.log(f"Using existing embedding: {reference_embedding}")
 
             classify_and_label(
-                input_dir=Path(self.input_dir.get()),
+                input_dir=self._resolve_path(self.input_dir.get()),
                 reference_embedding=reference_embedding,
                 threshold=self.threshold.get(),
-                report_csv=Path(self.report_csv.get()),
+                report_csv=self._resolve_path(self.report_csv.get()),
                 min_seconds=self.min_seconds.get(),
                 apply_changes=self.apply_changes.get(),
                 action=self.action.get(),
                 prefix=self.prefix.get(),
-                copy_dir=Path(self.copy_dir.get()),
-                renamed_txt=Path(self.renamed_txt.get()),
+                copy_dir=self._resolve_path(self.copy_dir.get()),
+                renamed_txt=self._resolve_path(self.renamed_txt.get()),
                 log=self.log,
             )
 

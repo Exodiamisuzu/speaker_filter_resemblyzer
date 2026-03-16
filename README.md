@@ -96,5 +96,28 @@ GUI supports:
 Then executable is generated at:
 
 ```text
-dist/ResemblyzerSpeakerFilter.exe
+dist/ResemblyzerSpeakerFilter/ResemblyzerSpeakerFilter.exe
 ```
+
+Packaging notes:
+- Default build now uses `onedir` instead of `onefile` for faster startup.
+- GUI delays loading `torch` and `resemblyzer` until you actually start a task, so the window opens faster.
+- Unused `pandas` dependency is removed to avoid unnecessary package size.
+
+## Build Compact EXE
+
+If you prefer a single-file portable build with smaller total distribution size, run:
+
+```powershell
+.\build_exe_compact.ps1
+```
+
+Then executable is generated at:
+
+```text
+dist/ResemblyzerSpeakerFilter_compact.exe
+```
+
+Trade-off:
+- `build_exe.ps1`: faster startup, but folder distribution is larger.
+- `build_exe_compact.ps1`: smaller to carry around, but startup is slower because onefile needs extraction.
