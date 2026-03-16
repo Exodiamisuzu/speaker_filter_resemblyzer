@@ -232,6 +232,71 @@ def classify_and_label(
         log(f"Renamed list written to: {renamed_txt} ({len(renamed_paths)} items)")
 
 
+def apply_hits_from_report(
+    report_csv: Path,
+    target_root: Path,
+    action: str,
+    prefix: str,
+    copy_dir: Path,
+    result_txt: Path,
+    log,
+):
+    if not report_csv.exists():
+        raise FileNotFoundError(f"report csv not found: {report_csv}")
+    if not target_root.exists():
+        raise FileNotFoundError(f"target root not found: {target_root}")
+    if action not in {"rename_prefix", "copy_to_dir"}:
+        raise ValueError("batch action must be rename_prefix or copy_to_dir")
+
+    target_root = target_root.resolve()
+    processed_paths = []
+    hit_rows = 0
+    missing_count = 0
+    outside_count = 0
+
+    with report_csv.open("r", newline="", encoding="utf-8-sig") as f:
+        rows = list(csv.DictReader(f))
+
+    for idx, row in enumerate(rows, start=1):
+        if str(row.get("is_target", "")).strip() != "1":
+            continue
+
+        hit_rows += 1
+        raw_path = str(row.get("path", "")).strip()
+        if not raw_path:
+            continue
+
+        src = Path(raw_path)
+        if not src.exists():
+            missing_count += 1
+            continue
+
+        src_resolved = src.resolve()
+        if not src_resolved.is_relative_to(target_root):
+            outside_count += 1
+            continue
+
+        if action == "rename_prefix":
+            new_path = safe_rename_with_prefix(src_resolved, prefix)
+            processed_paths.append(str(new_path))
+        elif action == "copy_to_dir":
+            out = safe_copy_to_folder(src_resolved, copy_dir)
+            processed_paths.append(str(out))
+
+        if idx % 200 == 0:
+            log(f"Batch process progress: {idx}/{len(rows)}")
+
+    result_txt.parent.mkdir(parents=True, exist_ok=True)
+    result_txt.write_text("\n".join(processed_paths), encoding="utf-8")
+
+    log(f"Report rows: {len(rows)}")
+    log(f"Target rows in report: {hit_rows}")
+    log(f"Processed files: {len(processed_paths)}")
+    log(f"Missing files skipped: {missing_count}")
+    log(f"Outside target root skipped: {outside_count}")
+    log(f"Batch result list written to: {result_txt}")
+
+
 class App:
     def __init__(self, root: Tk):
         self.root = root
@@ -261,8 +326,9 @@ class App:
         self.threshold = DoubleVar(value=0.73)
         self.min_seconds = DoubleVar(value=0.8)
         self.report_csv = StringVar(value=str(default_report))
+        self.hit_report_csv = StringVar(value=str(default_report))
+        self.hit_root_dir = StringVar(value=str(default_input_dir))
 
-        self.apply_changes = BooleanVar(value=False)
         self.action = StringVar(value="none")
         self.prefix = StringVar(value="Misuzu")
         self.copy_dir = StringVar(value=str(default_copy_dir))
@@ -270,7 +336,9 @@ class App:
         self.status_text = StringVar(value="就绪")
 
         self.running = False
-        self.start_btn = None
+        self.step1_btn = None
+        self.step2_btn = None
+        self.step3_btn = None
         self.progress_bar = None
 
         self._configure_styles()
@@ -323,19 +391,25 @@ class App:
 
         action_card = ttk.LabelFrame(frame, text="3) 命中文件处理", style="Card.TLabelframe", padding=10)
         action_card.grid(row=4, column=0, sticky="ew", pady=(0, 10))
-        ttk.Checkbutton(action_card, text="应用文件变更", variable=self.apply_changes).grid(row=0, column=0, sticky="w")
-        ttk.Label(action_card, text="动作").grid(row=0, column=1, sticky="w")
-        ttk.Combobox(action_card, textvariable=self.action, values=["none", "rename_prefix", "copy_to_dir"], state="readonly", width=18).grid(row=0, column=2, sticky="w")
-        ttk.Label(action_card, text="重命名前缀").grid(row=1, column=0, sticky="w", pady=(6, 2))
-        ttk.Entry(action_card, textvariable=self.prefix, width=24).grid(row=1, column=1, sticky="w", pady=(6, 2))
-        self._add_path_row(action_card, 2, "复制输出目录", self.copy_dir, pick_dir=True)
-        self._add_path_row(action_card, 3, "改名清单 TXT", self.renamed_txt, pick_save=True)
+        self._add_path_row(action_card, 0, "命中来源报告 CSV", self.hit_report_csv, pick_file=True)
+        self._add_path_row(action_card, 1, "命中目标根目录", self.hit_root_dir, pick_dir=True)
+        ttk.Label(action_card, text="动作").grid(row=2, column=0, sticky="w", pady=(6, 2))
+        ttk.Combobox(action_card, textvariable=self.action, values=["rename_prefix", "copy_to_dir"], state="readonly", width=18).grid(row=2, column=1, sticky="w", pady=(6, 2))
+        ttk.Label(action_card, text="重命名前缀").grid(row=2, column=2, sticky="w", pady=(6, 2))
+        ttk.Entry(action_card, textvariable=self.prefix, width=18).grid(row=2, column=3, sticky="w", pady=(6, 2))
+        self._add_path_row(action_card, 3, "复制输出目录", self.copy_dir, pick_dir=True)
+        self._add_path_row(action_card, 4, "处理结果 TXT", self.renamed_txt, pick_save=True)
+        ttk.Label(action_card, text="步骤3将基于报告里的 is_target=1 进行批处理", style="Hint.TLabel").grid(row=5, column=0, columnspan=4, sticky="w", pady=(2, 0))
         action_card.grid_columnconfigure(1, weight=1)
 
         btn_frame = ttk.Frame(frame, style="App.TFrame")
         btn_frame.grid(row=5, column=0, sticky="ew", pady=(0, 8))
-        self.start_btn = ttk.Button(btn_frame, text="开始执行", style="Primary.TButton", command=self.start)
-        self.start_btn.pack(side="left")
+        self.step1_btn = ttk.Button(btn_frame, text="执行步骤1 生成向量", style="Primary.TButton", command=self.start_step1)
+        self.step1_btn.pack(side="left")
+        self.step2_btn = ttk.Button(btn_frame, text="执行步骤2 扫描+报告", command=self.start_step2)
+        self.step2_btn.pack(side="left", padx=8)
+        self.step3_btn = ttk.Button(btn_frame, text="执行步骤3 批处理命中", command=self.start_step3)
+        self.step3_btn.pack(side="left")
         ttk.Button(btn_frame, text="退出", command=self.root.destroy).pack(side="left", padx=8)
         self.progress_bar = ttk.Progressbar(btn_frame, mode="indeterminate", length=180)
         self.progress_bar.pack(side="left", padx=(8, 0))
@@ -383,13 +457,20 @@ class App:
         if self.min_seconds.get() <= 0:
             raise ValueError("最短秒数必须大于 0")
 
-        if self.apply_changes.get():
-            if self.action.get() not in {"rename_prefix", "copy_to_dir"}:
-                raise ValueError("已勾选应用文件变更时，动作必须是 rename_prefix 或 copy_to_dir")
-            if self.action.get() == "rename_prefix" and not self.prefix.get().strip():
-                raise ValueError("重命名前缀不能为空")
+    def _set_running(self, running: bool, status: str):
+        self.running = running
+        self.status_text.set(status)
+        state = "disabled" if running else "normal"
+        for btn in [self.step1_btn, self.step2_btn, self.step3_btn]:
+            if btn is not None:
+                btn.configure(state=state)
+        if self.progress_bar is not None:
+            if running:
+                self.progress_bar.start(10)
+            else:
+                self.progress_bar.stop()
 
-    def start(self):
+    def _run_async(self, task_fn, running_text: str):
         if self.running:
             messagebox.showinfo("提示", "任务正在执行中，请稍候")
             return
@@ -400,59 +481,105 @@ class App:
             messagebox.showerror("参数错误", str(ex))
             return
 
-        self.running = True
-        self.status_text.set("运行中...")
-        if self.start_btn is not None:
-            self.start_btn.configure(state="disabled")
-        if self.progress_bar is not None:
-            self.progress_bar.start(10)
-        th = threading.Thread(target=self._run_task, daemon=True)
+        self._set_running(True, running_text)
+        th = threading.Thread(target=task_fn, daemon=True)
         th.start()
 
-    def _run_task(self):
+    def _get_embedding_for_scan(self) -> Path:
+        if self.ref_mode.get() == 2:
+            emb = self._resolve_path(self.reference_embedding.get())
+        else:
+            emb = self._resolve_path(self.reference_output_npy.get())
+
+        if not emb.exists():
+            raise FileNotFoundError(f"embedding not found: {emb}. 请先执行步骤1或切换为已有 embedding")
+        return emb
+
+    def start_step1(self):
+        self._run_async(self._run_step1, "步骤1运行中...")
+
+    def start_step2(self):
+        self._run_async(self._run_step2, "步骤2运行中...")
+
+    def start_step3(self):
+        self._run_async(self._run_step3, "步骤3运行中...")
+
+    def _run_step1(self):
         try:
-            self.log("========== 任务开始 ==========")
+            self.log("========== 步骤1开始：构建角色特征向量 ==========")
             self.log(f"Base directory: {self.base_dir}")
+            reference_embedding = build_reference(
+                self._resolve_path(self.reference_dir.get()),
+                self._resolve_path(self.reference_output_npy.get()),
+                self._resolve_path(self.reference_output_meta.get()),
+                min_seconds=self.min_seconds.get(),
+                log=self.log,
+            )
+            self.reference_embedding.set(str(reference_embedding))
+            self.ref_mode.set(2)
+            self.log("========== 步骤1完成 ==========")
+            self._set_running(False, "步骤1完成")
+            messagebox.showinfo("完成", "步骤1完成：已生成角色向量，可继续步骤2")
+        except Exception as ex:
+            self.log(f"ERROR: {ex}")
+            self._set_running(False, "步骤1失败")
+            messagebox.showerror("执行失败", str(ex))
 
-            if self.ref_mode.get() == 1:
-                reference_embedding = build_reference(
-                    self._resolve_path(self.reference_dir.get()),
-                    self._resolve_path(self.reference_output_npy.get()),
-                    self._resolve_path(self.reference_output_meta.get()),
-                    self.min_seconds.get(),
-                    self.log,
-                )
-            else:
-                reference_embedding = self._resolve_path(self.reference_embedding.get())
-                self.log(f"Using existing embedding: {reference_embedding}")
-
+    def _run_step2(self):
+        try:
+            self.log("========== 步骤2开始：扫描并输出报告 ==========")
+            self.log(f"Base directory: {self.base_dir}")
+            embedding = self._get_embedding_for_scan()
             classify_and_label(
                 input_dir=self._resolve_path(self.input_dir.get()),
-                reference_embedding=reference_embedding,
+                reference_embedding=embedding,
                 threshold=self.threshold.get(),
                 report_csv=self._resolve_path(self.report_csv.get()),
                 min_seconds=self.min_seconds.get(),
-                apply_changes=self.apply_changes.get(),
-                action=self.action.get(),
+                apply_changes=False,
+                action="none",
                 prefix=self.prefix.get(),
                 copy_dir=self._resolve_path(self.copy_dir.get()),
                 renamed_txt=self._resolve_path(self.renamed_txt.get()),
                 log=self.log,
             )
-
-            self.log("========== 任务完成 ==========")
-            self.status_text.set("完成")
-            messagebox.showinfo("完成", "处理完成，请查看日志与输出文件")
+            self.hit_report_csv.set(self.report_csv.get())
+            self.hit_root_dir.set(self.input_dir.get())
+            self.log("========== 步骤2完成 ==========")
+            self._set_running(False, "步骤2完成")
+            messagebox.showinfo("完成", "步骤2完成：报告已生成，可继续步骤3")
         except Exception as ex:
             self.log(f"ERROR: {ex}")
-            self.status_text.set("失败")
+            self._set_running(False, "步骤2失败")
             messagebox.showerror("执行失败", str(ex))
-        finally:
-            self.running = False
-            if self.start_btn is not None:
-                self.start_btn.configure(state="normal")
-            if self.progress_bar is not None:
-                self.progress_bar.stop()
+
+    def _run_step3(self):
+        try:
+            self.log("========== 步骤3开始：批处理命中文件 ==========")
+            self.log(f"Base directory: {self.base_dir}")
+            action = self.action.get()
+            if action not in {"rename_prefix", "copy_to_dir"}:
+                raise ValueError("步骤3的动作必须为 rename_prefix 或 copy_to_dir")
+            if action == "rename_prefix" and not self.prefix.get().strip():
+                raise ValueError("重命名前缀不能为空")
+
+            apply_hits_from_report(
+                report_csv=self._resolve_path(self.hit_report_csv.get()),
+                target_root=self._resolve_path(self.hit_root_dir.get()),
+                action=action,
+                prefix=self.prefix.get(),
+                copy_dir=self._resolve_path(self.copy_dir.get()),
+                result_txt=self._resolve_path(self.renamed_txt.get()),
+                log=self.log,
+            )
+
+            self.log("========== 步骤3完成 ==========")
+            self._set_running(False, "步骤3完成")
+            messagebox.showinfo("完成", "步骤3完成：命中文件已批处理")
+        except Exception as ex:
+            self.log(f"ERROR: {ex}")
+            self._set_running(False, "步骤3失败")
+            messagebox.showerror("执行失败", str(ex))
 
 
 def main():
