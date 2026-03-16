@@ -36,18 +36,19 @@ jobs:
         run: |
           .\.venv\Scripts\python.exe -m pip install --upgrade pip
           .\.venv\Scripts\python.exe -m pip install -r requirements.txt
-          .\.venv\Scripts\python.exe -m pip install pyinstaller
+          .\.venv\Scripts\python.exe -m pip install pyinstaller==6.19.0
 
       - name: Remove incompatible backport packages
         run: |
-          .\.venv\Scripts\python.exe -m pip show typing *> $null
-          if ($LASTEXITCODE -eq 0) {
-            .\.venv\Scripts\python.exe -m pip uninstall -y typing
+          $packages = @("typing", "pandas")
+          foreach ($pkg in $packages) {
+            .\.venv\Scripts\python.exe -m pip uninstall -y $pkg
+            if ($LASTEXITCODE -ne 0) {
+              Write-Host "Package '$pkg' not installed or already removed, continue."
+              $global:LASTEXITCODE = 0
+            }
           }
-          .\.venv\Scripts\python.exe -m pip show pandas *> $null
-          if ($LASTEXITCODE -eq 0) {
-            .\.venv\Scripts\python.exe -m pip uninstall -y pandas
-          }
+          exit 0
       
       - name: Build EXE
         run: |
