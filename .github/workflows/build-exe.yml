@@ -3,15 +3,15 @@ name: Build Windows EXE
 on:
   push:
     branches:
-      - main
+      - master
     paths:
-      - 'speaker_filter_resemblyzer/**'
+      - '**'
       - '.github/workflows/build-exe.yml'
   pull_request:
     branches:
-      - main
+      - master
     paths:
-      - 'speaker_filter_resemblyzer/**'
+      - '**'
   workflow_dispatch:
 
 jobs:
@@ -26,26 +26,21 @@ jobs:
         uses: actions/setup-python@v5
         with:
           python-version: '3.12'
+          cache: 'pip'
       
-      - name: Create and activate venv
-        working-directory: speaker_filter_resemblyzer
+      - name: Create venv
         run: |
           python -m venv .venv
-          .\.venv\Scripts\Activate.ps1
-          python -m pip install --upgrade pip
       
       - name: Install dependencies
-        working-directory: speaker_filter_resemblyzer
         run: |
-          .\.venv\Scripts\Activate.ps1
-          pip install -r requirements.txt
-          pip install pyinstaller
+          .\.venv\Scripts\python.exe -m pip install --upgrade pip
+          .\.venv\Scripts\python.exe -m pip install -r requirements.txt
+          .\.venv\Scripts\python.exe -m pip install pyinstaller
       
       - name: Build EXE
-        working-directory: speaker_filter_resemblyzer
         run: |
-          .\.venv\Scripts\Activate.ps1
-          python -m PyInstaller --name AirBarAudioSeparator `
+          .\.venv\Scripts\python.exe -m PyInstaller --name AirBarAudioSeparator `
             --onedir `
             --windowed `
             --add-data "background.jpg:." `
@@ -58,13 +53,11 @@ jobs:
             gui_resemblyzer.py
       
       - name: Clean up build files
-        working-directory: speaker_filter_resemblyzer
         run: |
           Remove-Item -Force -Path "AirBarAudioSeparator.spec" -ErrorAction SilentlyContinue
           Remove-Item -Recurse -Force -Path "build" -ErrorAction SilentlyContinue
       
       - name: Create ZIP archive
-        working-directory: speaker_filter_resemblyzer
         run: |
           Compress-Archive -Path dist/AirBarAudioSeparator -DestinationPath dist/AirBarAudioSeparator.zip -Force
           Write-Output "ZIP 压缩完成"
@@ -74,14 +67,14 @@ jobs:
         uses: actions/upload-artifact@v4
         with:
           name: AirBarAudioSeparator-exe
-          path: speaker_filter_resemblyzer/dist/AirBarAudioSeparator/
+          path: dist/AirBarAudioSeparator/
           retention-days: 7
       
       - name: Upload zip artifact
         uses: actions/upload-artifact@v4
         with:
           name: AirBarAudioSeparator-zip
-          path: speaker_filter_resemblyzer/dist/AirBarAudioSeparator.zip
+          path: dist/AirBarAudioSeparator.zip
           retention-days: 7
       
       - name: Create Release (on tag)
@@ -89,7 +82,7 @@ jobs:
         uses: softprops/action-gh-release@v1
         with:
           files: |
-            speaker_filter_resemblyzer/dist/AirBarAudioSeparator.zip
+            dist/AirBarAudioSeparator.zip
           draft: false
           prerelease: false
         env:
