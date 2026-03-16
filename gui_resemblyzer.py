@@ -236,7 +236,8 @@ class App:
     def __init__(self, root: Tk):
         self.root = root
         self.root.title("Resemblyzer Speaker Filter")
-        self.root.geometry("980x760")
+        self.root.geometry("1080x820")
+        self.root.minsize(980, 760)
 
         self.base_dir = detect_app_base_dir()
         default_ref_dir = self.base_dir / "ok"
@@ -266,62 +267,85 @@ class App:
         self.prefix = StringVar(value="Misuzu")
         self.copy_dir = StringVar(value=str(default_copy_dir))
         self.renamed_txt = StringVar(value=str(default_renamed))
+        self.status_text = StringVar(value="就绪")
 
         self.running = False
+        self.start_btn = None
+        self.progress_bar = None
 
+        self._configure_styles()
         self._build_ui()
 
+    def _configure_styles(self):
+        style = ttk.Style()
+        try:
+            style.theme_use("clam")
+        except Exception:
+            pass
+
+        self.root.configure(bg="#f2f5f9")
+        style.configure("App.TFrame", background="#f2f5f9")
+        style.configure("Card.TLabelframe", background="#ffffff", borderwidth=1, relief="solid")
+        style.configure("Card.TLabelframe.Label", background="#ffffff", foreground="#12324a", font=("Segoe UI", 10, "bold"))
+        style.configure("Header.TLabel", background="#f2f5f9", foreground="#0d3b66", font=("Segoe UI", 18, "bold"))
+        style.configure("SubHeader.TLabel", background="#f2f5f9", foreground="#4a6173", font=("Segoe UI", 10))
+        style.configure("Hint.TLabel", background="#f2f5f9", foreground="#5b7285", font=("Segoe UI", 9))
+        style.configure("Primary.TButton", font=("Segoe UI", 10, "bold"))
+        style.configure("Status.TLabel", background="#f2f5f9", foreground="#0d3b66", font=("Segoe UI", 10, "bold"))
+
     def _build_ui(self):
-        frame = ttk.Frame(self.root, padding=10)
+        frame = ttk.Frame(self.root, padding=14, style="App.TFrame")
         frame.pack(fill="both", expand=True)
 
-        ttk.Label(frame, text="1) 参考声纹来源", font=("Segoe UI", 11, "bold")).grid(row=0, column=0, sticky="w", pady=(0, 6))
+        ttk.Label(frame, text="Resemblyzer Speaker Filter", style="Header.TLabel").grid(row=0, column=0, sticky="w")
+        ttk.Label(frame, text="批量识别并标记目标角色语音", style="SubHeader.TLabel").grid(row=1, column=0, sticky="w", pady=(0, 10))
 
-        ttk.Radiobutton(frame, text="从参考音频目录构建", variable=self.ref_mode, value=1).grid(row=1, column=0, sticky="w")
-        self._add_path_row(frame, 2, "参考音频目录", self.reference_dir, pick_dir=True)
-        self._add_path_row(frame, 3, "构建输出 .npy", self.reference_output_npy, pick_save=True)
-        self._add_path_row(frame, 4, "构建输出 .meta.json", self.reference_output_meta, pick_save=True)
+        ref_card = ttk.LabelFrame(frame, text="1) 参考声纹来源", style="Card.TLabelframe", padding=10)
+        ref_card.grid(row=2, column=0, sticky="ew", pady=(0, 10))
+        ttk.Radiobutton(ref_card, text="从参考音频目录构建", variable=self.ref_mode, value=1).grid(row=0, column=0, sticky="w")
+        self._add_path_row(ref_card, 1, "参考音频目录", self.reference_dir, pick_dir=True)
+        self._add_path_row(ref_card, 2, "构建输出 .npy", self.reference_output_npy, pick_save=True)
+        self._add_path_row(ref_card, 3, "构建输出 .meta.json", self.reference_output_meta, pick_save=True)
+        ttk.Radiobutton(ref_card, text="直接使用已有 embedding (.npy)", variable=self.ref_mode, value=2).grid(row=4, column=0, sticky="w", pady=(6, 0))
+        self._add_path_row(ref_card, 5, "已有 embedding", self.reference_embedding, pick_file=True)
+        ref_card.grid_columnconfigure(1, weight=1)
 
-        ttk.Radiobutton(frame, text="直接使用已有 embedding (.npy)", variable=self.ref_mode, value=2).grid(row=5, column=0, sticky="w", pady=(8, 0))
-        self._add_path_row(frame, 6, "已有 embedding", self.reference_embedding, pick_file=True)
+        scan_card = ttk.LabelFrame(frame, text="2) 扫描设置", style="Card.TLabelframe", padding=10)
+        scan_card.grid(row=3, column=0, sticky="ew", pady=(0, 10))
+        self._add_path_row(scan_card, 0, "扫描目录", self.input_dir, pick_dir=True)
+        self._add_path_row(scan_card, 1, "报告 CSV", self.report_csv, pick_save=True)
+        ttk.Label(scan_card, text="阈值 (0~1)").grid(row=2, column=0, sticky="w", pady=(6, 2))
+        ttk.Entry(scan_card, textvariable=self.threshold, width=16).grid(row=2, column=1, sticky="w", pady=(6, 2))
+        ttk.Label(scan_card, text="最短秒数").grid(row=2, column=2, sticky="w", pady=(6, 2))
+        ttk.Entry(scan_card, textvariable=self.min_seconds, width=16).grid(row=2, column=3, sticky="w", pady=(6, 2))
+        ttk.Label(scan_card, text="建议先 dry-run，再启用文件变更", style="Hint.TLabel").grid(row=3, column=0, columnspan=4, sticky="w", pady=(2, 0))
+        scan_card.grid_columnconfigure(1, weight=1)
 
-        ttk.Separator(frame).grid(row=7, column=0, columnspan=4, sticky="ew", pady=10)
+        action_card = ttk.LabelFrame(frame, text="3) 命中文件处理", style="Card.TLabelframe", padding=10)
+        action_card.grid(row=4, column=0, sticky="ew", pady=(0, 10))
+        ttk.Checkbutton(action_card, text="应用文件变更", variable=self.apply_changes).grid(row=0, column=0, sticky="w")
+        ttk.Label(action_card, text="动作").grid(row=0, column=1, sticky="w")
+        ttk.Combobox(action_card, textvariable=self.action, values=["none", "rename_prefix", "copy_to_dir"], state="readonly", width=18).grid(row=0, column=2, sticky="w")
+        ttk.Label(action_card, text="重命名前缀").grid(row=1, column=0, sticky="w", pady=(6, 2))
+        ttk.Entry(action_card, textvariable=self.prefix, width=24).grid(row=1, column=1, sticky="w", pady=(6, 2))
+        self._add_path_row(action_card, 2, "复制输出目录", self.copy_dir, pick_dir=True)
+        self._add_path_row(action_card, 3, "改名清单 TXT", self.renamed_txt, pick_save=True)
+        action_card.grid_columnconfigure(1, weight=1)
 
-        ttk.Label(frame, text="2) 扫描设置", font=("Segoe UI", 11, "bold")).grid(row=8, column=0, sticky="w", pady=(0, 6))
-        self._add_path_row(frame, 9, "扫描目录", self.input_dir, pick_dir=True)
-        self._add_path_row(frame, 10, "报告 CSV", self.report_csv, pick_save=True)
-
-        ttk.Label(frame, text="阈值 (0~1)").grid(row=11, column=0, sticky="w")
-        ttk.Entry(frame, textvariable=self.threshold, width=14).grid(row=11, column=1, sticky="w")
-
-        ttk.Label(frame, text="最短秒数").grid(row=11, column=2, sticky="w")
-        ttk.Entry(frame, textvariable=self.min_seconds, width=14).grid(row=11, column=3, sticky="w")
-
-        ttk.Separator(frame).grid(row=12, column=0, columnspan=4, sticky="ew", pady=10)
-
-        ttk.Label(frame, text="3) 命中文件处理", font=("Segoe UI", 11, "bold")).grid(row=13, column=0, sticky="w", pady=(0, 6))
-
-        ttk.Checkbutton(frame, text="应用文件变更", variable=self.apply_changes).grid(row=14, column=0, sticky="w")
-
-        ttk.Label(frame, text="动作").grid(row=14, column=1, sticky="w")
-        ttk.Combobox(frame, textvariable=self.action, values=["none", "rename_prefix", "copy_to_dir"], state="readonly", width=18).grid(row=14, column=2, sticky="w")
-
-        ttk.Label(frame, text="重命名前缀").grid(row=15, column=0, sticky="w")
-        ttk.Entry(frame, textvariable=self.prefix, width=25).grid(row=15, column=1, sticky="w")
-
-        self._add_path_row(frame, 16, "复制输出目录", self.copy_dir, pick_dir=True)
-        self._add_path_row(frame, 17, "改名清单 TXT", self.renamed_txt, pick_save=True)
-
-        btn_frame = ttk.Frame(frame)
-        btn_frame.grid(row=18, column=0, columnspan=4, sticky="w", pady=(10, 8))
-        ttk.Button(btn_frame, text="开始执行", command=self.start).pack(side="left")
+        btn_frame = ttk.Frame(frame, style="App.TFrame")
+        btn_frame.grid(row=5, column=0, sticky="ew", pady=(0, 8))
+        self.start_btn = ttk.Button(btn_frame, text="开始执行", style="Primary.TButton", command=self.start)
+        self.start_btn.pack(side="left")
         ttk.Button(btn_frame, text="退出", command=self.root.destroy).pack(side="left", padx=8)
+        self.progress_bar = ttk.Progressbar(btn_frame, mode="indeterminate", length=180)
+        self.progress_bar.pack(side="left", padx=(8, 0))
+        ttk.Label(btn_frame, textvariable=self.status_text, style="Status.TLabel").pack(side="left", padx=(12, 0))
 
-        self.log_box = ScrolledText(frame, height=16)
-        self.log_box.grid(row=19, column=0, columnspan=4, sticky="nsew")
+        self.log_box = ScrolledText(frame, height=14, font=("Consolas", 10), bg="#fbfdff")
+        self.log_box.grid(row=6, column=0, sticky="nsew")
 
-        frame.grid_columnconfigure(1, weight=1)
-        frame.grid_rowconfigure(19, weight=1)
+        frame.grid_columnconfigure(0, weight=1)
+        frame.grid_rowconfigure(6, weight=1)
 
     def _resolve_path(self, value: str) -> Path:
         p = Path(value)
@@ -377,6 +401,11 @@ class App:
             return
 
         self.running = True
+        self.status_text.set("运行中...")
+        if self.start_btn is not None:
+            self.start_btn.configure(state="disabled")
+        if self.progress_bar is not None:
+            self.progress_bar.start(10)
         th = threading.Thread(target=self._run_task, daemon=True)
         th.start()
 
@@ -412,12 +441,18 @@ class App:
             )
 
             self.log("========== 任务完成 ==========")
+            self.status_text.set("完成")
             messagebox.showinfo("完成", "处理完成，请查看日志与输出文件")
         except Exception as ex:
             self.log(f"ERROR: {ex}")
+            self.status_text.set("失败")
             messagebox.showerror("执行失败", str(ex))
         finally:
             self.running = False
+            if self.start_btn is not None:
+                self.start_btn.configure(state="normal")
+            if self.progress_bar is not None:
+                self.progress_bar.stop()
 
 
 def main():
